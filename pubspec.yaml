@@ -6,6 +6,7 @@ homepage: https://github.com/TerminalStudio/dartssh2
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
+  # dartssh2 is a vendored copy; workspace resolution overrides the original constraint
 
 dependencies:
   asn1lib: ^1.5.8

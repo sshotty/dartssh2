@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' show max;
 import 'dart:typed_data';
 
+import 'package:meta/meta.dart';
 import 'package:dartssh2/src/hostkey/hostkey_ecdsa.dart';
 import 'package:dartssh2/src/hostkey/hostkey_rsa.dart';
 import 'package:dartssh2/src/kex/kex_dh.dart';
@@ -470,6 +471,133 @@ class SSHTransport {
   }
 
   /// Subscribes to the underlying socket stream to handle incoming data and status events.
+
+  @visibleForTesting
+  void configureForTesting({
+    String? remoteVersion,
+    SSHKexType? kexType,
+    SSHCipherType? clientCipherType,
+    SSHCipherType? serverCipherType,
+    SSHMacType? clientMacType,
+    SSHMacType? serverMacType,
+    BigInt? sharedSecret,
+    Uint8List? exchangeHash,
+    Uint8List? sessionId,
+    Uint8List? localCipherKey,
+    Uint8List? remoteCipherKey,
+    Uint8List? localIV,
+    Uint8List? remoteIV,
+    bool? kexInProgress,
+    bool? sentKexInit,
+    int? localPacketSequence,
+    int? remotePacketSequence,
+  }) {
+    if (remoteVersion != null) {
+      _remoteVersion = remoteVersion;
+    }
+    if (kexType != null) {
+      _kexType = kexType;
+    }
+    if (clientCipherType != null) {
+      _clientCipherType = clientCipherType;
+    }
+    if (serverCipherType != null) {
+      _serverCipherType = serverCipherType;
+    }
+    if (clientMacType != null) {
+      _clientMacType = clientMacType;
+    }
+    if (serverMacType != null) {
+      _serverMacType = serverMacType;
+    }
+    if (sharedSecret != null) {
+      _sharedSecret = sharedSecret;
+    }
+    if (exchangeHash != null) {
+      _exchangeHash = exchangeHash;
+    }
+    if (sessionId != null) {
+      _sessionId = sessionId;
+    }
+    if (localCipherKey != null) {
+      _localCipherKey = localCipherKey;
+    }
+    if (remoteCipherKey != null) {
+      _remoteCipherKey = remoteCipherKey;
+    }
+    if (localIV != null) {
+      _localIV = localIV;
+    }
+    if (remoteIV != null) {
+      _remoteIV = remoteIV;
+    }
+    if (kexInProgress != null) {
+      _kexInProgress = kexInProgress;
+    }
+    if (sentKexInit != null) {
+      _sentKexInit = sentKexInit;
+    }
+    if (localPacketSequence != null) {
+      _localPacketSN.setValueForTesting(localPacketSequence);
+    }
+    if (remotePacketSequence != null) {
+      _remotePacketSN.setValueForTesting(remotePacketSequence);
+    }
+  }
+
+  @visibleForTesting
+  Uint8List nonceForSequenceForTesting(Uint8List iv, int sequence) {
+    return _nonceForSequence(iv, sequence);
+  }
+
+  @visibleForTesting
+  Uint8List? consumeAeadPacketForTesting(SSHCipherType cipherType) {
+    return _consumeAeadPacket(cipherType);
+  }
+
+  @visibleForTesting
+  void applyLocalKeysForTesting() => _applyLocalKeys();
+
+  @visibleForTesting
+  void applyRemoteKeysForTesting() => _applyRemoteKeys();
+
+  @visibleForTesting
+  void handleMessageKexInitForTesting(Uint8List payload) {
+    _handleMessageKexInit(payload);
+  }
+
+  @visibleForTesting
+  void addIncomingBytesForTesting(Uint8List data) {
+    _buffer.add(data);
+  }
+
+  @visibleForTesting
+  Uint8List? get localCipherKeyForTesting => _localCipherKey;
+
+  @visibleForTesting
+  Uint8List? get remoteCipherKeyForTesting => _remoteCipherKey;
+
+  @visibleForTesting
+  Uint8List? get localIVForTesting => _localIV;
+
+  @visibleForTesting
+  Uint8List? get remoteIVForTesting => _remoteIV;
+
+  @visibleForTesting
+  BlockCipher? get encryptCipherForTesting => _encryptCipher;
+
+  @visibleForTesting
+  BlockCipher? get decryptCipherForTesting => _decryptCipher;
+
+  @visibleForTesting
+  Mac? get localMacForTesting => _localMac;
+
+  @visibleForTesting
+  Mac? get remoteMacForTesting => _remoteMac;
+
+  @visibleForTesting
+  List<Uint8List> get rekeyPendingPacketsForTesting => _rekeyPendingPackets;
+
   void _initSocket() {
     _socketSubscription = socket.stream.listen(
       _onSocketData,

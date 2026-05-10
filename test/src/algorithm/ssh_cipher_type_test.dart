@@ -1,5 +1,4 @@
 import 'dart:typed_data';
-import 'dart:mirrors';
 
 import 'package:dartssh2/dartssh2.dart';
 import 'package:dartssh2/src/ssh_algorithm.dart';
@@ -72,21 +71,15 @@ void main() {
     });
 
     test('createCipher throws when cipher factory is missing', () {
-      final library = reflectClass(SSHCipherType).owner as LibraryMirror;
-      final ctor = MirrorSystem.getSymbol('_', library);
-      final dynamic custom = reflectClass(SSHCipherType).newInstance(
-        ctor,
-        const [],
-        {
-          #name: 'custom-null-factory',
-          #keySize: 16,
-          #ivSize: 16,
-          #blockSize: 16,
-          #isAead: false,
-          #aeadTagSize: 0,
-          #cipherFactory: null,
-        },
-      ).reflectee;
+      final custom = SSHCipherType.createForTesting(
+        name: 'custom-null-factory',
+        keySize: 16,
+        ivSize: 16,
+        blockSize: 16,
+        isAead: false,
+        aeadTagSize: 0,
+        cipherFactory: null,
+      );
 
       expect(
         () => custom.createCipher(

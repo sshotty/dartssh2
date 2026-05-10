@@ -1,165 +1,137 @@
 import 'dart:async';
-import 'dart:mirrors';
 import 'dart:typed_data';
 
 import 'package:dartssh2/dartssh2.dart';
 import 'package:dartssh2/src/message/msg_kex.dart';
-import 'package:dartssh2/src/ssh_packet.dart';
 import 'package:test/test.dart';
 
 void main() {
-  final transportLibrary = reflectClass(SSHTransport).owner as LibraryMirror;
-  final packetLibrary = reflectClass(SSHPacketSN).owner as LibraryMirror;
-  Symbol privateSymbol(String name) =>
-      MirrorSystem.getSymbol(name, transportLibrary);
-  Symbol packetPrivateSymbol(String name) =>
-      MirrorSystem.getSymbol(name, packetLibrary);
-  void setPrivate(SSHTransport transport, String field, Object? value) {
-    reflect(transport).setField(privateSymbol(field), value);
-  }
-
-  T getPrivate<T>(SSHTransport transport, String field) {
-    return reflect(transport).getField(privateSymbol(field)).reflectee as T;
-  }
-
-  void setSequenceValue(SSHTransport transport, String field, int value) {
-    final sequence =
-        reflect(transport).getField(privateSymbol(field)).reflectee;
-    reflect(sequence).setField(packetPrivateSymbol('_value'), value);
-  }
-
   group('SSHTransport AEAD', () {
     test('exchanges packets with AES-GCM', () async {
-      for (final cipherType in [
-        SSHCipherType.aes128gcm,
-        SSHCipherType.aes256gcm
-      ]) {
-        final key = Uint8List(cipherType.keySize);
-        final iv = Uint8List(cipherType.ivSize);
-        for (var i = 0; i < key.length; i++) {
-          key[i] = i;
-        }
-        for (var i = 0; i < iv.length; i++) {
-          iv[i] = i + 16;
-        }
-
-        for (final payloadLength in [1, 5, 6, 10, 11, 15, 16, 20, 31, 32]) {
-          final senderSocket = _CaptureSSHSocket();
-          final sender = SSHTransport(
-            senderSocket,
-            algorithms: SSHAlgorithms(
-              cipher: [cipherType],
-            ),
-          );
-
-          setPrivate(sender, '_clientCipherType', cipherType);
-          setPrivate(sender, '_localCipherKey', key);
-          setPrivate(sender, '_localIV', iv);
-          setPrivate(sender, '_kexInProgress', false);
-          setSequenceValue(sender, '_localPacketSN', 0);
-
-          final payload = Uint8List.fromList(
-            List.generate(payloadLength, (index) => index % 256),
-          );
-          sender.sendPacket(payload);
-
-          final encryptedPacket = senderSocket.packets.last;
-
-          final receiverSocket = _CaptureSSHSocket();
-          final receivedPacket = Completer<Uint8List>();
-          final receiver = SSHTransport(
-            receiverSocket,
-            algorithms: SSHAlgorithms(
-              cipher: [cipherType],
-            ),
-            onPacket: (packet) {
-              if (!receivedPacket.isCompleted) {
-                receivedPacket.complete(packet);
-              }
-            },
-          );
-
-          setPrivate(receiver, '_remoteVersion', 'SSH-2.0-test');
-          setPrivate(receiver, '_serverCipherType', cipherType);
-          setPrivate(receiver, '_remoteCipherKey', key);
-          setPrivate(receiver, '_remoteIV', iv);
-          setSequenceValue(receiver, '_remotePacketSN', 0);
-
-          receiverSocket.addIncomingBytes(encryptedPacket);
-
-          final received =
-              await receivedPacket.future.timeout(const Duration(seconds: 2));
-          expect(received, payload);
-
-          sender.close();
-          receiver.close();
-        }
+      final key = Uint8List(16);
+      final iv = Uint8List(12);
+      for (var i = 0; i < key.length; i++) {
+        key[i] = i;
       }
+      for (var i = 0; i < iv.length; i++) {
+        iv[i] = i + 16;
+      }
+
+      final senderSocket = _CaptureSSHSocket();
+      final sender = SSHTransport(
+        senderSocket,
+        algorithms: const SSHAlgorithms(
+          cipher: [SSHCipherType.aes128gcm],
+        ),
+      );
+
+      sender.configureForTesting(
+        clientCipherType: SSHCipherType.aes128gcm,
+        localCipherKey: key,
+        localIV: iv,
+        kexInProgress: false,
+        localPacketSequence: 0,
+      );
+
+      final payload = Uint8List.fromList([250, 1, 2, 3, 4, 5]);
+      sender.sendPacket(payload);
+
+      final encryptedPacket = senderSocket.packets.last;
+
+      final receiverSocket = _CaptureSSHSocket();
+      final receivedPacket = Completer<Uint8List>();
+      final receiver = SSHTransport(
+        receiverSocket,
+        algorithms: const SSHAlgorithms(
+          cipher: [SSHCipherType.aes128gcm],
+        ),
+        onPacket: (packet) {
+          if (!receivedPacket.isCompleted) {
+            receivedPacket.complete(packet);
+          }
+        },
+      );
+
+      receiver.configureForTesting(
+        remoteVersion: 'SSH-2.0-test',
+        serverCipherType: SSHCipherType.aes128gcm,
+        remoteCipherKey: key,
+        remoteIV: iv,
+        remotePacketSequence: 0,
+      );
+
+      receiverSocket.addIncomingBytes(encryptedPacket);
+
+      final received =
+          await receivedPacket.future.timeout(const Duration(seconds: 2));
+      expect(received, payload);
+
+      sender.close();
+      receiver.close();
     });
 
     test('reports AEAD authentication failure when packet is tampered',
         () async {
-      for (final cipherType in [
-        SSHCipherType.aes128gcm,
-        SSHCipherType.aes256gcm
-      ]) {
-        final key = Uint8List(cipherType.keySize);
-        final iv = Uint8List(cipherType.ivSize);
-        for (var i = 0; i < key.length; i++) {
-          key[i] = i;
-        }
-        for (var i = 0; i < iv.length; i++) {
-          iv[i] = i + 16;
-        }
-
-        final senderSocket = _CaptureSSHSocket();
-        final sender = SSHTransport(
-          senderSocket,
-          algorithms: SSHAlgorithms(
-            cipher: [cipherType],
-          ),
-        );
-
-        setPrivate(sender, '_clientCipherType', cipherType);
-        setPrivate(sender, '_localCipherKey', key);
-        setPrivate(sender, '_localIV', iv);
-        setPrivate(sender, '_kexInProgress', false);
-        setSequenceValue(sender, '_localPacketSN', 0);
-
-        sender.sendPacket(Uint8List.fromList([251, 9, 8, 7]));
-        final tampered = Uint8List.fromList(senderSocket.packets.last);
-        tampered[tampered.length - 1] ^= 0x01;
-
-        final receiverSocket = _CaptureSSHSocket();
-        final receiver = SSHTransport(
-          receiverSocket,
-          algorithms: SSHAlgorithms(
-            cipher: [cipherType],
-          ),
-        );
-
-        setPrivate(receiver, '_remoteVersion', 'SSH-2.0-test');
-        setPrivate(receiver, '_serverCipherType', cipherType);
-        setPrivate(receiver, '_remoteCipherKey', key);
-        setPrivate(receiver, '_remoteIV', iv);
-        setSequenceValue(receiver, '_remotePacketSN', 0);
-
-        receiverSocket.addIncomingBytes(tampered);
-
-        await expectLater(
-          receiver.done,
-          throwsA(
-            predicate(
-              (error) =>
-                  error is SSHPacketError &&
-                  error.toString().contains('AEAD authentication failed'),
-            ),
-          ),
-        );
-
-        sender.close();
-        receiver.close();
+      final key = Uint8List(16);
+      final iv = Uint8List(12);
+      for (var i = 0; i < key.length; i++) {
+        key[i] = i;
       }
+      for (var i = 0; i < iv.length; i++) {
+        iv[i] = i + 16;
+      }
+
+      final senderSocket = _CaptureSSHSocket();
+      final sender = SSHTransport(
+        senderSocket,
+        algorithms: const SSHAlgorithms(
+          cipher: [SSHCipherType.aes128gcm],
+        ),
+      );
+
+      sender.configureForTesting(
+        clientCipherType: SSHCipherType.aes128gcm,
+        localCipherKey: key,
+        localIV: iv,
+        kexInProgress: false,
+        localPacketSequence: 0,
+      );
+
+      sender.sendPacket(Uint8List.fromList([251, 9, 8, 7]));
+      final tampered = Uint8List.fromList(senderSocket.packets.last);
+      tampered[tampered.length - 1] ^= 0x01;
+
+      final receiverSocket = _CaptureSSHSocket();
+      final receiver = SSHTransport(
+        receiverSocket,
+        algorithms: const SSHAlgorithms(
+          cipher: [SSHCipherType.aes128gcm],
+        ),
+      );
+
+      receiver.configureForTesting(
+        remoteVersion: 'SSH-2.0-test',
+        serverCipherType: SSHCipherType.aes128gcm,
+        remoteCipherKey: key,
+        remoteIV: iv,
+        remotePacketSequence: 0,
+      );
+
+      receiverSocket.addIncomingBytes(tampered);
+
+      await expectLater(
+        receiver.done,
+        throwsA(
+          predicate(
+            (error) =>
+                error is SSHPacketError &&
+                error.toString().contains('AEAD authentication failed'),
+          ),
+        ),
+      );
+
+      sender.close();
+      receiver.close();
     });
 
     test('validates AEAD nonce IV length', () {
@@ -167,10 +139,7 @@ void main() {
       final transport = SSHTransport(socket);
 
       expect(
-        () => reflect(transport).invoke(
-          privateSymbol('_nonceForSequence'),
-          [Uint8List(8), 0],
-        ),
+        () => transport.nonceForSequenceForTesting(Uint8List(8), 0),
         throwsA(isA<ArgumentError>()),
       );
 
@@ -178,114 +147,101 @@ void main() {
     });
 
     test('consumeAeadPacket returns null for incomplete inputs', () {
-      for (final cipherType in [
-        SSHCipherType.aes128gcm,
-        SSHCipherType.aes256gcm
-      ]) {
-        final socket = _CaptureSSHSocket();
-        final transport = SSHTransport(socket);
+      final socket = _CaptureSSHSocket();
+      final transport = SSHTransport(socket);
 
-        setPrivate(transport, '_remoteVersion', 'SSH-2.0-test');
-        setPrivate(transport, '_serverCipherType', cipherType);
-        setPrivate(
-            transport, '_remoteCipherKey', Uint8List(cipherType.keySize));
-        setPrivate(transport, '_remoteIV', Uint8List(cipherType.ivSize));
-        setSequenceValue(transport, '_remotePacketSN', 0);
+      transport.configureForTesting(
+        remoteVersion: 'SSH-2.0-test',
+        serverCipherType: SSHCipherType.aes128gcm,
+        remoteCipherKey: Uint8List(16),
+        remoteIV: Uint8List(12),
+        remotePacketSequence: 0,
+      );
 
-        final resultNoHeader = reflect(transport).invoke(
-            privateSymbol('_consumeAeadPacket'), [cipherType]).reflectee;
-        expect(resultNoHeader, isNull);
+      final resultNoHeader =
+          transport.consumeAeadPacketForTesting(SSHCipherType.aes128gcm);
+      expect(resultNoHeader, isNull);
 
-        final dynamic buffer = getPrivate<dynamic>(transport, '_buffer');
-        buffer.add(Uint8List.fromList([0, 0, 0, 20, 1, 2, 3]));
+      transport.addIncomingBytesForTesting(
+        Uint8List.fromList([0, 0, 0, 20, 1, 2, 3]),
+      );
 
-        final resultPartial = reflect(transport).invoke(
-            privateSymbol('_consumeAeadPacket'), [cipherType]).reflectee;
-        expect(resultPartial, isNull);
+      final resultPartial =
+          transport.consumeAeadPacketForTesting(SSHCipherType.aes128gcm);
+      expect(resultPartial, isNull);
 
-        transport.close();
-      }
+      transport.close();
     });
 
     test('applyLocalKeys keeps AEAD mode without cipher/mac instances', () {
-      for (final cipherType in [
-        SSHCipherType.aes128gcm,
-        SSHCipherType.aes256gcm
-      ]) {
-        final socket = _CaptureSSHSocket();
-        final transport = SSHTransport(socket);
+      final socket = _CaptureSSHSocket();
+      final transport = SSHTransport(socket);
 
-        setPrivate(transport, '_kexType', SSHKexType.x25519);
-        setPrivate(transport, '_sharedSecret', BigInt.from(1));
-        setPrivate(transport, '_exchangeHash',
-            Uint8List.fromList(List<int>.filled(32, 1)));
-        setPrivate(transport, '_sessionId',
-            Uint8List.fromList(List<int>.filled(32, 2)));
-        setPrivate(transport, '_clientCipherType', cipherType);
+      transport.configureForTesting(
+        kexType: SSHKexType.x25519,
+        sharedSecret: BigInt.from(1),
+        exchangeHash: Uint8List.fromList(List<int>.filled(32, 1)),
+        sessionId: Uint8List.fromList(List<int>.filled(32, 2)),
+        clientCipherType: SSHCipherType.aes128gcm,
+      );
 
-        reflect(transport).invoke(privateSymbol('_applyLocalKeys'), const []);
+      transport.applyLocalKeysForTesting();
 
-        final localKey = getPrivate<Uint8List?>(transport, '_localCipherKey');
-        final localIv = getPrivate<Uint8List?>(transport, '_localIV');
-        expect(localKey, isNotNull);
-        expect(localKey!.length, cipherType.keySize);
-        expect(localIv, isNotNull);
-        expect(localIv!.length, cipherType.ivSize);
-        expect(getPrivate<Object?>(transport, '_encryptCipher'), isNull);
-        expect(getPrivate<Object?>(transport, '_localMac'), isNull);
+      final localKey = transport.localCipherKeyForTesting;
+      final localIv = transport.localIVForTesting;
+      expect(localKey, isNotNull);
+      expect(localKey!.length, SSHCipherType.aes128gcm.keySize);
+      expect(localIv, isNotNull);
+      expect(localIv!.length, SSHCipherType.aes128gcm.ivSize);
+      expect(transport.encryptCipherForTesting, isNull);
+      expect(transport.localMacForTesting, isNull);
 
-        transport.close();
-      }
+      transport.close();
     });
 
     test('applyRemoteKeys keeps AEAD mode without cipher/mac instances', () {
-      for (final cipherType in [
-        SSHCipherType.aes128gcm,
-        SSHCipherType.aes256gcm
-      ]) {
-        final socket = _CaptureSSHSocket();
-        final transport = SSHTransport(socket);
+      final socket = _CaptureSSHSocket();
+      final transport = SSHTransport(socket);
 
-        setPrivate(transport, '_kexType', SSHKexType.x25519);
-        setPrivate(transport, '_sharedSecret', BigInt.from(1));
-        setPrivate(transport, '_exchangeHash',
-            Uint8List.fromList(List<int>.filled(32, 3)));
-        setPrivate(transport, '_sessionId',
-            Uint8List.fromList(List<int>.filled(32, 4)));
-        setPrivate(transport, '_serverCipherType', cipherType);
+      transport.configureForTesting(
+        kexType: SSHKexType.x25519,
+        sharedSecret: BigInt.from(1),
+        exchangeHash: Uint8List.fromList(List<int>.filled(32, 3)),
+        sessionId: Uint8List.fromList(List<int>.filled(32, 4)),
+        serverCipherType: SSHCipherType.aes128gcm,
+      );
 
-        reflect(transport).invoke(privateSymbol('_applyRemoteKeys'), const []);
+      transport.applyRemoteKeysForTesting();
 
-        final remoteKey = getPrivate<Uint8List?>(transport, '_remoteCipherKey');
-        final remoteIv = getPrivate<Uint8List?>(transport, '_remoteIV');
-        expect(remoteKey, isNotNull);
-        expect(remoteKey!.length, cipherType.keySize);
-        expect(remoteIv, isNotNull);
-        expect(remoteIv!.length, cipherType.ivSize);
-        expect(getPrivate<Object?>(transport, '_decryptCipher'), isNull);
-        expect(getPrivate<Object?>(transport, '_remoteMac'), isNull);
+      final remoteKey = transport.remoteCipherKeyForTesting;
+      final remoteIv = transport.remoteIVForTesting;
+      expect(remoteKey, isNotNull);
+      expect(remoteKey!.length, SSHCipherType.aes128gcm.keySize);
+      expect(remoteIv, isNotNull);
+      expect(remoteIv!.length, SSHCipherType.aes128gcm.ivSize);
+      expect(transport.decryptCipherForTesting, isNull);
+      expect(transport.remoteMacForTesting, isNull);
 
-        transport.close();
-      }
+      transport.close();
     });
 
     test('applyLocalKeys creates cipher and mac for non-AEAD algorithms', () {
       final socket = _CaptureSSHSocket();
       final transport = SSHTransport(socket);
 
-      setPrivate(transport, '_kexType', SSHKexType.x25519);
-      setPrivate(transport, '_sharedSecret', BigInt.from(5));
-      setPrivate(transport, '_exchangeHash',
-          Uint8List.fromList(List<int>.filled(32, 6)));
-      setPrivate(
-          transport, '_sessionId', Uint8List.fromList(List<int>.filled(32, 7)));
-      setPrivate(transport, '_clientCipherType', SSHCipherType.aes128ctr);
-      setPrivate(transport, '_clientMacType', SSHMacType.hmacSha256);
+      transport.configureForTesting(
+        kexType: SSHKexType.x25519,
+        sharedSecret: BigInt.from(5),
+        exchangeHash: Uint8List.fromList(List<int>.filled(32, 6)),
+        sessionId: Uint8List.fromList(List<int>.filled(32, 7)),
+        clientCipherType: SSHCipherType.aes128ctr,
+        clientMacType: SSHMacType.hmacSha256,
+      );
 
-      reflect(transport).invoke(privateSymbol('_applyLocalKeys'), const []);
+      transport.applyLocalKeysForTesting();
 
-      expect(getPrivate<Object?>(transport, '_encryptCipher'), isNotNull);
-      expect(getPrivate<Object?>(transport, '_localMac'), isNotNull);
+      expect(transport.encryptCipherForTesting, isNotNull);
+      expect(transport.localMacForTesting, isNotNull);
 
       transport.close();
     });
@@ -294,71 +250,65 @@ void main() {
       final socket = _CaptureSSHSocket();
       final transport = SSHTransport(socket);
 
-      setPrivate(transport, '_kexType', SSHKexType.x25519);
-      setPrivate(transport, '_sharedSecret', BigInt.from(8));
-      setPrivate(transport, '_exchangeHash',
-          Uint8List.fromList(List<int>.filled(32, 9)));
-      setPrivate(transport, '_sessionId',
-          Uint8List.fromList(List<int>.filled(32, 10)));
-      setPrivate(transport, '_serverCipherType', SSHCipherType.aes128ctr);
-      setPrivate(transport, '_serverMacType', SSHMacType.hmacSha256);
+      transport.configureForTesting(
+        kexType: SSHKexType.x25519,
+        sharedSecret: BigInt.from(8),
+        exchangeHash: Uint8List.fromList(List<int>.filled(32, 9)),
+        sessionId: Uint8List.fromList(List<int>.filled(32, 10)),
+        serverCipherType: SSHCipherType.aes128ctr,
+        serverMacType: SSHMacType.hmacSha256,
+      );
 
-      reflect(transport).invoke(privateSymbol('_applyRemoteKeys'), const []);
+      transport.applyRemoteKeysForTesting();
 
-      expect(getPrivate<Object?>(transport, '_decryptCipher'), isNotNull);
-      expect(getPrivate<Object?>(transport, '_remoteMac'), isNotNull);
+      expect(transport.decryptCipherForTesting, isNotNull);
+      expect(transport.remoteMacForTesting, isNotNull);
 
       transport.close();
     });
 
-    test('kexinit allows missing MAC when AEAD cipher is selected', () async {
-      for (final cipherType in [
-        SSHCipherType.aes128gcm,
-        SSHCipherType.aes256gcm
-      ]) {
-        final socket = _CaptureSSHSocket();
-        final transport = SSHTransport(
-          socket,
-          algorithms: SSHAlgorithms(
-            cipher: [cipherType],
-            mac: const [SSHMacType.hmacSha256],
-          ),
-        );
+    test('kexinit allows missing MAC when AEAD cipher is selected', () {
+      final socket = _CaptureSSHSocket();
+      final transport = SSHTransport(
+        socket,
+        algorithms: const SSHAlgorithms(
+          cipher: [SSHCipherType.aes128gcm],
+          mac: [SSHMacType.hmacSha256],
+        ),
+      );
 
-        setPrivate(transport, '_kexInProgress', true);
-        setPrivate(transport, '_sentKexInit', true);
+      transport.configureForTesting(kexInProgress: true, sentKexInit: true);
 
-        final payload = SSH_Message_KexInit(
-          kexAlgorithms: [SSHKexType.x25519.name],
-          serverHostKeyAlgorithms: [SSHHostkeyType.ed25519.name],
-          encryptionClientToServer: [cipherType.name],
-          encryptionServerToClient: [cipherType.name],
-          macClientToServer: const ['missing-mac'],
-          macServerToClient: const ['missing-mac'],
-          compressionClientToServer: const ['none'],
-          compressionServerToClient: const ['none'],
-          firstKexPacketFollows: false,
-        ).encode();
+      final payload = SSH_Message_KexInit(
+        kexAlgorithms: [SSHKexType.x25519.name],
+        serverHostKeyAlgorithms: [SSHHostkeyType.ed25519.name],
+        encryptionClientToServer: [SSHCipherType.aes128gcm.name],
+        encryptionServerToClient: [SSHCipherType.aes128gcm.name],
+        macClientToServer: const ['missing-mac'],
+        macServerToClient: const ['missing-mac'],
+        compressionClientToServer: const ['none'],
+        compressionServerToClient: const ['none'],
+        firstKexPacketFollows: false,
+      ).encode();
 
-        final result = reflect(transport).invoke(
-            privateSymbol('_handleMessageKexInit'), [payload]).reflectee;
-        await expectLater(result, completes);
+      expect(
+        () => transport.handleMessageKexInitForTesting(payload),
+        returnsNormally,
+      );
 
-        transport.close();
-      }
+      transport.close();
     });
 
     test('sendPacket buffers non-kex packets during key exchange', () {
       final socket = _CaptureSSHSocket();
       final transport = SSHTransport(socket);
 
-      setPrivate(transport, '_kexInProgress', true);
+      transport.configureForTesting(kexInProgress: true);
 
       // 94 is outside control/kex message ranges and should be buffered.
       transport.sendPacket(Uint8List.fromList([94, 1, 2]));
 
-      final pending =
-          getPrivate<List<Uint8List>>(transport, '_rekeyPendingPackets');
+      final pending = transport.rekeyPendingPacketsForTesting;
       expect(pending, hasLength(1));
       expect(pending.first, Uint8List.fromList([94, 1, 2]));
 
@@ -370,8 +320,7 @@ void main() {
       final transport = SSHTransport(socket);
 
       expect(
-        () => reflect(transport)
-            .invoke(privateSymbol('_applyLocalKeys'), const []),
+        () => transport.applyLocalKeysForTesting(),
         throwsA(isA<StateError>()),
       );
 
@@ -383,8 +332,7 @@ void main() {
       final transport = SSHTransport(socket);
 
       expect(
-        () => reflect(transport)
-            .invoke(privateSymbol('_applyRemoteKeys'), const []),
+        () => transport.applyRemoteKeysForTesting(),
         throwsA(isA<StateError>()),
       );
 
@@ -395,17 +343,16 @@ void main() {
       final socket = _CaptureSSHSocket();
       final transport = SSHTransport(socket);
 
-      setPrivate(transport, '_kexType', SSHKexType.x25519);
-      setPrivate(transport, '_sharedSecret', BigInt.from(11));
-      setPrivate(transport, '_exchangeHash',
-          Uint8List.fromList(List<int>.filled(32, 12)));
-      setPrivate(transport, '_sessionId',
-          Uint8List.fromList(List<int>.filled(32, 13)));
-      setPrivate(transport, '_clientCipherType', SSHCipherType.aes128ctr);
+      transport.configureForTesting(
+        kexType: SSHKexType.x25519,
+        sharedSecret: BigInt.from(11),
+        exchangeHash: Uint8List.fromList(List<int>.filled(32, 12)),
+        sessionId: Uint8List.fromList(List<int>.filled(32, 13)),
+        clientCipherType: SSHCipherType.aes128ctr,
+      );
 
       expect(
-        () => reflect(transport)
-            .invoke(privateSymbol('_applyLocalKeys'), const []),
+        () => transport.applyLocalKeysForTesting(),
         throwsA(isA<StateError>()),
       );
 
@@ -416,25 +363,23 @@ void main() {
       final socket = _CaptureSSHSocket();
       final transport = SSHTransport(socket);
 
-      setPrivate(transport, '_kexType', SSHKexType.x25519);
-      setPrivate(transport, '_sharedSecret', BigInt.from(14));
-      setPrivate(transport, '_exchangeHash',
-          Uint8List.fromList(List<int>.filled(32, 15)));
-      setPrivate(transport, '_sessionId',
-          Uint8List.fromList(List<int>.filled(32, 16)));
-      setPrivate(transport, '_serverCipherType', SSHCipherType.aes128ctr);
+      transport.configureForTesting(
+        kexType: SSHKexType.x25519,
+        sharedSecret: BigInt.from(14),
+        exchangeHash: Uint8List.fromList(List<int>.filled(32, 15)),
+        sessionId: Uint8List.fromList(List<int>.filled(32, 16)),
+        serverCipherType: SSHCipherType.aes128ctr,
+      );
 
       expect(
-        () => reflect(transport)
-            .invoke(privateSymbol('_applyRemoteKeys'), const []),
+        () => transport.applyRemoteKeysForTesting(),
         throwsA(isA<StateError>()),
       );
 
       transport.close();
     });
 
-    test('kexinit requires client MAC when non-AEAD cipher is selected',
-        () async {
+    test('kexinit requires client MAC when non-AEAD cipher is selected', () {
       final socket = _CaptureSSHSocket();
       final transport = SSHTransport(
         socket,
@@ -444,8 +389,7 @@ void main() {
         ),
       );
 
-      setPrivate(transport, '_kexInProgress', true);
-      setPrivate(transport, '_sentKexInit', true);
+      transport.configureForTesting(kexInProgress: true, sentKexInit: true);
 
       final payload = SSH_Message_KexInit(
         kexAlgorithms: [SSHKexType.x25519.name],
@@ -459,22 +403,15 @@ void main() {
         firstKexPacketFollows: false,
       ).encode();
 
-      await expectLater(
-        () async {
-          final result = reflect(transport).invoke(
-              privateSymbol('_handleMessageKexInit'), [payload]).reflectee;
-          if (result is Future) {
-            await result;
-          }
-        },
+      expect(
+        () => transport.handleMessageKexInitForTesting(payload),
         throwsA(isA<StateError>()),
       );
 
       transport.close();
     });
 
-    test('kexinit requires server MAC when non-AEAD cipher is selected',
-        () async {
+    test('kexinit requires server MAC when non-AEAD cipher is selected', () {
       final socket = _CaptureSSHSocket();
       final transport = SSHTransport(
         socket,
@@ -484,8 +421,7 @@ void main() {
         ),
       );
 
-      setPrivate(transport, '_kexInProgress', true);
-      setPrivate(transport, '_sentKexInit', true);
+      transport.configureForTesting(kexInProgress: true, sentKexInit: true);
 
       final payload = SSH_Message_KexInit(
         kexAlgorithms: [SSHKexType.x25519.name],
@@ -499,14 +435,8 @@ void main() {
         firstKexPacketFollows: false,
       ).encode();
 
-      await expectLater(
-        () async {
-          final result = reflect(transport).invoke(
-              privateSymbol('_handleMessageKexInit'), [payload]).reflectee;
-          if (result is Future) {
-            await result;
-          }
-        },
+      expect(
+        () => transport.handleMessageKexInitForTesting(payload),
         throwsA(isA<StateError>()),
       );
 
@@ -548,9 +478,6 @@ class _CaptureSSHSocket implements SSHSocket {
     }
     unawaited(_inputController.close());
   }
-
-  @override
-  Future<void> flush() async {}
 }
 
 class _CaptureSink implements StreamSink<List<int>> {

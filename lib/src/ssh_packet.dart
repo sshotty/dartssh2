@@ -62,6 +62,10 @@ class SSHPacketSN {
 
   int get value => _value;
 
+  void setValueForTesting(int value) {
+    _value = value;
+  }
+
   void increase() {
     if (_value == 0xffffffff) {
       _value = 0;
