@@ -53,7 +53,12 @@ class SSHMessageReader {
   }
 
   int readUint64() {
-    final value = _byteData.getUint64(_offset);
+    // ByteData.getUint64 is not implemented by dart2js. Decode the SSH
+    // network-order integer directly so SFTP metadata also works on web.
+    var value = 0;
+    for (var i = 0; i < 8; i++) {
+      value = (value << 8) | data[_offset + i];
+    }
     _offset += 8;
     return value;
   }
