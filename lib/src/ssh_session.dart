@@ -115,6 +115,29 @@ class SSHSession {
     );
   }
 
+  /// Request PTY allocation on the remote side.
+  ///
+  /// Use when the shell was created without a PTY ([SSHClient.shell] with
+  /// `pty: null`). The PTY is allocated at the given dimensions and can
+  /// be resized later via [resizeTerminal].
+  Future<bool> requestPty({
+    String terminalType = 'xterm-256color',
+    int terminalWidth = 80,
+    int terminalHeight = 25,
+    int terminalPixelWidth = 0,
+    int terminalPixelHeight = 0,
+    Uint8List? terminalModes,
+  }) {
+    return _channel.sendPtyReq(
+      terminalType: terminalType,
+      terminalWidth: terminalWidth,
+      terminalHeight: terminalHeight,
+      terminalPixelWidth: terminalPixelWidth,
+      terminalPixelHeight: terminalPixelHeight,
+      terminalModes: terminalModes,
+    );
+  }
+
   /// Close the session. After this call, the session is no longer usable.
   void close() {
     _channel.close();

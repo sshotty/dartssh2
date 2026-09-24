@@ -437,6 +437,7 @@ class SSHChannel {
   final SSHChannelController _controller;
 
   /// Send data to the remote side.
+  /// Send data to the remote side.
   void addData(Uint8List data, {int? type}) {
     sink.add(SSHChannelData(data, type: type));
   }
@@ -467,6 +468,24 @@ class SSHChannel {
       authenticationProtocol: authenticationProtocol,
       authenticationCookie: authenticationCookie,
       screenNumber: screenNumber,
+    );
+  }
+
+  Future<bool> sendPtyReq({
+    String terminalType = 'xterm-256color',
+    int terminalWidth = 80,
+    int terminalHeight = 25,
+    int terminalPixelWidth = 0,
+    int terminalPixelHeight = 0,
+    Uint8List? terminalModes,
+  }) {
+    return _controller.sendPtyReq(
+      terminalType: terminalType,
+      terminalWidth: terminalWidth,
+      terminalHeight: terminalHeight,
+      terminalPixelWidth: terminalPixelWidth,
+      terminalPixelHeight: terminalPixelHeight,
+      terminalModes: terminalModes,
     );
   }
 
